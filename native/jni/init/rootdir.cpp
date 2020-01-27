@@ -182,12 +182,6 @@ bool MagiskInit::patch_sepolicy(const char *file) {
 	return patch_init;
 }
 
-constexpr const char wrapper[] =
-"#!/system/bin/sh\n"
-"export LD_LIBRARY_PATH=\"$LD_LIBRARY_PATH:/apex/com.android.runtime/" LIBNAME "\"\n"
-"exec /sbin/magisk.bin \"$0\" \"$@\"\n"
-;
-
 static void sbin_overlay(const raw_data &self, const raw_data &config) {
 	mount_sbin();
 
@@ -199,17 +193,8 @@ static void sbin_overlay(const raw_data &self, const raw_data &config) {
 	fd = xopen("/sbin/magiskinit", O_WRONLY | O_CREAT, 0755);
 	xwrite(fd, self.buf, self.sz);
 	close(fd);
-	if (access("/system/apex", F_OK) == 0) {
-		LOGD("APEX detected, use wrapper\n");
-		dump_magisk("/sbin/magisk.bin", 0755);
-		patch_socket_name("/sbin/magisk.bin");
-		fd = xopen("/sbin/magisk", O_WRONLY | O_CREAT, 0755);
-		xwrite(fd, wrapper, sizeof(wrapper) - 1);
-		close(fd);
-	} else {
-		dump_magisk("/sbin/magisk", 0755);
-		patch_socket_name("/sbin/magisk");
-	}
+	dump_magisk("/sbin/magisk", 0755);
+	patch_socket_name("/sbin/magisk");
 
 	// Create applet symlinks
 	char path[64];
@@ -422,20 +407,24 @@ static void patch_fstab(const string &fstab) {
 #define FSR "/first_stage_ramdisk"
 
 void ABFirstStageInit::prepare() {
-	auto dir = xopen_dir(FSR);
-	if (!dir)
-		return;
-	string fstab(FSR "/");
-	for (dirent *de; (de = xreaddir(dir.get()));) {
-		if (strstr(de->d_name, "fstab")) {
-			fstab += de->d_name;
-			break;
-		}
-	}
-	if (fstab.length() == sizeof(FSR))
-		return;
+	// It is actually possible to NOT have FSR, create it just in case
+	xmkdir(FSR, 0755);
 
-	patch_fstab(fstab);
+	if (auto dir = xopen_dir(FSR); dir) {
+		string fstab(FSR "/");
+		for (dirent *de; (de = xreaddir(dir.get()));) {
+			if (strstr(de->d_name, "fstab")) {
+				fstab += de->d_name;
+				break;
+			}
+		}
+		if (fstab.length() == sizeof(FSR))
+			return;
+
+		patch_fstab(fstab);
+	} else {
+		return;
+	}
 
 	// Move stuffs for next stage
 	xmkdir(FSR "/system", 0755);
